@@ -86,16 +86,27 @@ struct FuncPtrPass : public ModulePass {
           errs() << *(ii->second.end()-1) << "\n";
       }
   }
+  void HandleFunction(Function * func)
+  {
+      for (Function::iterator bi=func->begin(), be=func->end(); bi != be; bi++)
+      {
+          for (BasicBlock::iterator ii=bi->begin(), ie=bi->end(); ii != ie; ii++)
+          {
+              Instruction * inst = dyn_cast<Instruction>(ii);
+              if (ReturnInst * retinst = dyn_cast<ReturnInst>(inst))//this line and last line can be merged?
+              {
+                  Value * value = retinst->getReturnValue();
+                  HandleObj(value);
+              }
+          }
+      }
+  }
+
   void HandleObj(Value * obj)
   {
       if(auto func = dyn_cast<Function>(obj))
       {
           Push(func->getName());
-      }
-      else if (auto callinst = dyn_cast<CallInst>(obj))
-      {
-          Value * value = callinst->getCalledValue();
-          HandleObj(value);
       }
       else if (auto phinode = dyn_cast<PHINode>(obj))
       {
@@ -104,6 +115,31 @@ struct FuncPtrPass : public ModulePass {
               HandleObj(value);
           }
       }
+      else if (auto callinst = dyn_cast<CallInst>(obj))
+      {
+          Function * func = callinst->getCalledFunction();
+          if (func)
+          {
+              HandleFunction(func);
+          }
+          else
+          {
+
+              Value * value = callinst->getCalledValue();
+              //in fact value is a phinode 
+              //we will traverse (dyn_cast<PHINode>(callinst->getcalledvalue()))->incoming_values
+              if (PHINode * phinode = dyn_cast<PHINode>(value))
+              {
+                  for (Value * value: phinode->incoming_values())
+                  {
+                      if (Function * func = dyn_cast<Function>(value))
+                      {
+                          HandleFunction(func);
+                      }
+                  }
+              }
+          }
+         }
       else if (auto argument = dyn_cast<Argument>(obj))
       {
           Function * func = argument->getParent();
@@ -151,7 +187,7 @@ struct FuncPtrPass : public ModulePass {
                   {
                       if (CallInst * callinst = dyn_cast<CallInst>(user))
                       {
-                          //if(arg_index < callinst->getNumArgOperands())
+                          if(arg_index < callinst->getNumArgOperands())
                           {
                               Value * value = callinst->getArgOperand(arg_index);
                               HandleObj(value);
@@ -198,8 +234,7 @@ struct FuncPtrPass : public ModulePass {
   }
 
   bool runOnModule(Module &M) override {
-    /*errs() << "Hello: ";
-    errs().write_escaped(M.getName()) << '\n';
+    /*errs().write_escaped(M.getName()) << '\n';
     M.dump();
     errs()<<"------------------------------\n";
     */for (Module::iterator fi=M.begin(), fe=M.end(); fi!=fe; fi++)
