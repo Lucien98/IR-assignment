@@ -24,6 +24,10 @@
 
 #include <llvm/IR/Function.h>
 #include <llvm/Pass.h>
+#include <llvm/IR/Instruction.h>
+#include <llvm/IR/Instructions.h>
+#include <llvm/IR/Argument.h>
+#include <llvm/IR/User.h>
 #include <llvm/Support/raw_ostream.h>
 
 #include <llvm/Bitcode/BitcodeReader.h>
@@ -58,12 +62,161 @@ struct FuncPtrPass : public ModulePass {
   static char ID; // Pass identification, replacement for typeid
   FuncPtrPass() : ModulePass(ID) {}
 
-  
+  std::map<int, std::vector<std::string>> results;
+  std::vector<std::string> funcNames;
+
+  void Push(std::string funcname)
+  {
+      if(find(funcNames.begin(), funcNames.end(), funcname) == funcNames.end())
+      {
+          funcNames.push_back(funcname);
+      }
+  }
+  void printResults(){
+      for (auto ii=results.begin(), ie=results.end(); ii!=ie; ii++)
+      {
+          //why there is a line with no function called insert into the funcNames vector
+          errs() << ii->first << ": ";
+          if (ii->second.size() == 0){ errs() << "\n"; continue;}
+          for (auto ji=ii->second.begin(), je=ii->second.end()-1; ji!=je; ji++)//why substract 1
+          {
+              if (ii->second.size()>0)
+              errs() << *ji << ", ";
+          }
+          errs() << *(ii->second.end()-1) << "\n";
+      }
+  }
+  void HandleObj(Value * obj)
+  {
+      if(auto func = dyn_cast<Function>(obj))
+      {
+          Push(func->getName());
+      }
+      else if (auto callinst = dyn_cast<CallInst>(obj))
+      {
+          Value * value = callinst->getCalledValue();
+          HandleObj(value);
+      }
+      else if (auto phinode = dyn_cast<PHINode>(obj))
+      {
+          for (Value * value: phinode->incoming_values())
+          {
+              HandleObj(value);
+          }
+      }
+      else if (auto argument = dyn_cast<Argument>(obj))
+      {
+          Function * func = argument->getParent();
+          int arg_index = argument->getArgNo();
+
+          //get the user (call inst as so on) of the function
+          for (User *user: func->users())
+          {
+              if (CallInst * callinst = dyn_cast<CallInst>(user))
+              {
+                  //why it is not ==? changed 
+                  Value * value = callinst->getArgOperand(arg_index);
+                  if (arg_index <= callinst->getNumOperands()-1)
+                  {
+                      if (callinst->getCalledFunction() == func) {HandleObj(value);}
+                      else { // 递归问题
+                          Function *func = callinst->getCalledFunction();
+                          for (Function::iterator bi = func->begin(), be = func->end(); bi != be; bi++)
+                          {
+                            // for instruction in basicblock
+                            for (BasicBlock::iterator ii = bi->begin(), ie = bi->end(); ii != ie; ii++)
+                            {
+                              Instruction *inst = dyn_cast<Instruction>(ii);
+                              if (ReturnInst *retInst = dyn_cast<ReturnInst>(inst))
+                              {
+                                Value *v = retInst->getReturnValue();
+                                if (CallInst *call_inst = dyn_cast<CallInst>(v))
+                                {
+                                  Value *value = call_inst->getArgOperand(arg_index);
+                                  if (Argument *argument = dyn_cast<Argument>(value))
+                                  {
+                                    HandleObj(argument);
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                  }
+              else if (PHINode * phinode = dyn_cast<PHINode>(user))
+              {
+                  //what does it mean by phinode->users
+                  for (User * user: phinode->users())
+                  {
+                      if (CallInst * callinst = dyn_cast<CallInst>(user))
+                      {
+                          //if(arg_index < callinst->getNumArgOperands())
+                          {
+                              Value * value = callinst->getArgOperand(arg_index);
+                              HandleObj(value);
+                          }
+                      }
+                  }
+              }
+          }
+
+        }
+  }
+  void GetResults(CallInst * callinst)
+  {
+      //get the function and line it locates in a CallInst
+      Function * func = callinst->getCalledFunction();
+      int line = callinst->getDebugLoc().getLine();
+      funcNames.clear();
+      if(func)
+      {
+          //push the function name and line number into the results map
+          std::string funcname = func->getName();
+          if (funcname != std::string("llvm.dbg.value"))
+          {
+              Push(funcname);
+              if (results.find(line) == results.end())
+              {
+                  results.insert(std::pair<int, std::vector<std::string>>(line, funcNames));
+              }
+              else
+              {
+                  auto i = results.find(line);
+                  i->second.push_back(funcname);
+              }
+          }
+      }
+      else
+      {
+          Value *value = callinst->getCalledValue();
+          HandleObj(value);
+          //what if the funct is not in a phinode
+          results.insert(std::pair<int, std::vector<std::string>>(line, funcNames));
+      }
+
+  }
+
   bool runOnModule(Module &M) override {
-    errs() << "Hello: ";
+    /*errs() << "Hello: ";
     errs().write_escaped(M.getName()) << '\n';
     M.dump();
     errs()<<"------------------------------\n";
+    */for (Module::iterator fi=M.begin(), fe=M.end(); fi!=fe; fi++)
+    {
+        for (Function::iterator bi=fi->begin(), be=fi->end(); bi!=be; bi++)
+        {
+            for (BasicBlock::iterator ii=bi->begin(), ie=bi->end(); ii!=ie; ii++)
+            {
+                Instruction * inst = dyn_cast<Instruction>(ii);
+                if (auto callinst = dyn_cast<CallInst>(inst))
+                {
+                    GetResults(callinst);
+                }
+            }
+        }
+    }
+    printResults();
     return false;
   }
 };
