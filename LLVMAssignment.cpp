@@ -155,7 +155,8 @@ struct FuncPtrPass : public ModulePass {
                   if (arg_index <= callinst->getNumOperands()-1)
                   {
                       if (callinst->getCalledFunction() == func) {HandleObj(value);}
-                      else { // 递归问题
+                      else 
+                      {
                           Function *func = callinst->getCalledFunction();
                           for (Function::iterator bi = func->begin(), be = func->end(); bi != be; bi++)
                           {
@@ -177,8 +178,8 @@ struct FuncPtrPass : public ModulePass {
                               }
                             }
                           }
-                        }
                       }
+                  }
                   }
               else if (PHINode * phinode = dyn_cast<PHINode>(user))
               {
@@ -202,36 +203,26 @@ struct FuncPtrPass : public ModulePass {
   void GetResults(CallInst * callinst)
   {
       //get the function and line it locates in a CallInst
-      Function * func = callinst->getCalledFunction();
-      int line = callinst->getDebugLoc().getLine();
-      funcNames.clear();
-      if(func)
-      {
-          //push the function name and line number into the results map
-          std::string funcname = func->getName();
-          if (funcname != std::string("llvm.dbg.value"))
-          {
-              Push(funcname);
-              if (results.find(line) == results.end())
-              {
-                  results.insert(std::pair<int, std::vector<std::string>>(line, funcNames));
-              }
-              else
-              {
-                  auto i = results.find(line);
-                  i->second.push_back(funcname);
-              }
-          }
-      }
-      else
-      {
-          Value *value = callinst->getCalledValue();
-          HandleObj(value);
-          //what if the funct is not in a phinode
-          results.insert(std::pair<int, std::vector<std::string>>(line, funcNames));
-      }
-
-  }
+      Value * value = callinst->getCalledValue();                               
+      Function * func = callinst->getCalledFunction();                          
+      int line = callinst->getDebugLoc().getLine();                             
+      funcNames.clear();                                                        
+      if (func && func->getName() == std::string("llvm.dbg.value")) return;     
+      HandleObj(value);                                                         
+      if (!func) results.insert(std::pair<int, std::vector<std::string>>(line, funcNames));
+      else                                                                      
+      {                                                                         
+          if (results.find(line) == results.end())                              
+          {                                                                     
+              results.insert(std::pair<int, std::vector<std::string>>(line, funcNames));
+          }                                                                     
+          else                                                                  
+          {                                                                     
+              auto i = results.find(line);                                      
+              i->second.push_back(func->getName());                             
+          }                                                                     
+      }                                                                         
+ }
 
   bool runOnModule(Module &M) override {
     /*errs().write_escaped(M.getName()) << '\n';
