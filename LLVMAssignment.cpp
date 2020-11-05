@@ -65,38 +65,29 @@ struct FuncPtrPass : public ModulePass {
   std::map<int, std::vector<std::string>> results;
   std::vector<std::string> funcNames;
 
-  void Push(std::string funcname)
-  {
-      if(find(funcNames.begin(), funcNames.end(), funcname) == funcNames.end())
-      {
-          funcNames.push_back(funcname);
-      }
-  }
   void printResults(){
-      for (auto ii=results.begin(), ie=results.end(); ii!=ie; ii++)
+
+      auto ii=results.begin(), ie=results.end();
+      do
       {
-          //why there is a line with no function called insert into the funcNames vector
-          errs() << ii->first << ": ";
-          if (ii->second.size() == 0){ errs() << "\n"; continue;}
-          for (auto ji=ii->second.begin(), je=ii->second.end()-1; ji!=je; ji++)//why substract 1
-          {
-              if (ii->second.size()>0)
-              errs() << *ji << ", ";
-          }
-          errs() << *(ii->second.end()-1) << "\n";
+          auto ji=ii->second.begin(), je=ii->second.end()-1;
+          if (ii->second.size()==0) continue;
+          for(errs() << ii->first << " : ";
+                  ji != je;
+                  errs() << *(ji++) << ", ");
+          errs() << *(je) << "\n";
       }
+      while(++ii != ie);
   }
   void HandleFunction(Function * func)
   {
-      for (Function::iterator bi=func->begin(), be=func->end(); bi != be; bi++)
+      for (BasicBlock &bi : *func)
       {
-          for (BasicBlock::iterator ii=bi->begin(), ie=bi->end(); ii != ie; ii++)
+          for (Instruction &ii : bi)
           {
-              Instruction * inst = dyn_cast<Instruction>(ii);
-              if (ReturnInst * retinst = dyn_cast<ReturnInst>(inst))//this line and last line can be merged?
+              if (ReturnInst * retinst = dyn_cast<ReturnInst>(&ii))//this line and last line can be merged?
               {
-                  Value * value = retinst->getReturnValue();
-                  HandleObj(value);
+                  HandleObj(retinst->getReturnValue());
               }
           }
       }
@@ -106,138 +97,78 @@ struct FuncPtrPass : public ModulePass {
   {
       if(auto func = dyn_cast<Function>(obj))
       {
-          Push(func->getName());
+          std::string funcname=func->getName();
+          if(find(funcNames.begin(), funcNames.end(), funcname) == funcNames.end())
+              funcNames.push_back(funcname);
       }
       else if (auto phinode = dyn_cast<PHINode>(obj))
       {
           for (Value * value: phinode->incoming_values())
-          {
               HandleObj(value);
-          }
       }
       else if (auto callinst = dyn_cast<CallInst>(obj))
       {
           Function * func = callinst->getCalledFunction();
           if (func)
-          {
               HandleFunction(func);
-          }
           else
           {
-
-              Value * value = callinst->getCalledValue();
-              //in fact value is a phinode 
-              //we will traverse (dyn_cast<PHINode>(callinst->getcalledvalue()))->incoming_values
-              if (PHINode * phinode = dyn_cast<PHINode>(value))
-              {
+              if (PHINode * phinode = dyn_cast<PHINode>(callinst->getCalledValue()))
                   for (Value * value: phinode->incoming_values())
-                  {
                       if (Function * func = dyn_cast<Function>(value))
-                      {
                           HandleFunction(func);
-                      }
-                  }
-              }
           }
-         }
+      }
       else if (auto argument = dyn_cast<Argument>(obj))
       {
           Function * func = argument->getParent();
           int arg_index = argument->getArgNo();
-
           //get the user (call inst as so on) of the function
           for (User *user: func->users())
           {
               if (CallInst * callinst = dyn_cast<CallInst>(user))
-              {
-                  //why it is not ==? changed 
-                  Value * value = callinst->getArgOperand(arg_index);
-                  if (arg_index <= callinst->getNumOperands()-1)
-                  {
-                      if (callinst->getCalledFunction() == func) {HandleObj(value);}
-                      else 
-                      {
-                          Function *func = callinst->getCalledFunction();
-                          for (Function::iterator bi = func->begin(), be = func->end(); bi != be; bi++)
-                          {
-                            // for instruction in basicblock
-                            for (BasicBlock::iterator ii = bi->begin(), ie = bi->end(); ii != ie; ii++)
-                            {
-                              Instruction *inst = dyn_cast<Instruction>(ii);
-                              if (ReturnInst *retInst = dyn_cast<ReturnInst>(inst))
-                              {
-                                Value *v = retInst->getReturnValue();
-                                if (CallInst *call_inst = dyn_cast<CallInst>(v))
-                                {
-                                  Value *value = call_inst->getArgOperand(arg_index);
-                                  if (Argument *argument = dyn_cast<Argument>(value))
-                                  {
-                                    HandleObj(argument);
-                                  }
-                                }
-                              }
-                            }
-                          }
-                      }
-                  }
-                  }
+              {    //why it is not ==? changed 
+                  if (callinst->getCalledFunction() == func) 
+                      HandleObj(callinst->getArgOperand(arg_index));
+                  else 
+                      for (BasicBlock &bi : *(callinst->getCalledFunction()) )
+                        for (Instruction &ii : bi)
+                          if (ReturnInst *retInst = dyn_cast<ReturnInst>(&ii))
+                            if (CallInst *call_inst = dyn_cast<CallInst>(retInst->getReturnValue()))
+                              if (Argument *argument = dyn_cast<Argument>(call_inst->getArgOperand(arg_index)))
+                                HandleObj(argument);
+              }
               else if (PHINode * phinode = dyn_cast<PHINode>(user))
-              {
                   //what does it mean by phinode->users
                   for (User * user: phinode->users())
-                  {
                       if (CallInst * callinst = dyn_cast<CallInst>(user))
-                      {
-                          if(arg_index < callinst->getNumArgOperands())
-                          {
-                              Value * value = callinst->getArgOperand(arg_index);
-                              HandleObj(value);
-                          }
-                      }
-                  }
-              }
-          }
-
-        }
+                          HandleObj(callinst->getOperand(arg_index));
+         }
+      }
   }
-  void GetResults(CallInst * callinst)
-  {
-      //get the function and line it locates in a CallInst
-      Value * value = callinst->getCalledValue();                               
-      Function * func = callinst->getCalledFunction();                          
-      int line = callinst->getDebugLoc().getLine();                             
-      funcNames.clear();                                                        
-      if (func && func->getName() == std::string("llvm.dbg.value")) return;     
-      HandleObj(value);                                                         
-      if (!func) results.insert(std::pair<int, std::vector<std::string>>(line, funcNames));
-      else                                                                      
-      {                                                                         
-          if (results.find(line) == results.end())                              
-          {                                                                     
-              results.insert(std::pair<int, std::vector<std::string>>(line, funcNames));
-          }                                                                     
-          else                                                                  
-          {                                                                     
-              auto i = results.find(line);                                      
-              i->second.push_back(func->getName());                             
-          }                                                                     
-      }                                                                         
- }
 
   bool runOnModule(Module &M) override {
     /*errs().write_escaped(M.getName()) << '\n';
     M.dump();
     errs()<<"------------------------------\n";
-    */for (Module::iterator fi=M.begin(), fe=M.end(); fi!=fe; fi++)
+    */for (Function  &fi : M)
     {
-        for (Function::iterator bi=fi->begin(), be=fi->end(); bi!=be; bi++)
+        if (fi.isIntrinsic()) continue;
+        for (BasicBlock &bi : fi)
         {
-            for (BasicBlock::iterator ii=bi->begin(), ie=bi->end(); ii!=ie; ii++)
+            for (Instruction &ii : bi)
             {
-                Instruction * inst = dyn_cast<Instruction>(ii);
-                if (auto callinst = dyn_cast<CallInst>(inst))
+                if (auto callinst = dyn_cast<CallInst>(&ii))
                 {
-                    GetResults(callinst);
+                      Function * func = callinst->getCalledFunction();                          
+                      int line = callinst->getDebugLoc().getLine();                             
+                      funcNames.clear();                                                        
+                      if (func && func->isIntrinsic()) continue;     
+                      HandleObj(callinst->getCalledValue());                                                         
+                      !func ? (void)results.insert(std::pair<int, std::vector<std::string>>(line, funcNames))
+                            : results.find(line) == results.end()
+                              ? (void)results.insert(std::pair<int, std::vector<std::string>>(line, funcNames))
+                              : results.find(line)->second.push_back(func->getName());                             
                 }
             }
         }
